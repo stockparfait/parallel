@@ -1,0 +1,98 @@
+#!/bin/bash
+
+# Copyright 2022 Stock Parfait
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# Stop the script on the first error.
+trap 'echo "runtests failed on line ${LINENO}"; exit 1' ERR
+
+ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "${ROOT}"
+
+GOPATH=`go env GOPATH`
+PATH="${GOPATH}/bin:${PATH}"
+export PATH
+
+echo "GOROOT: `go env GOROOT`"
+echo "GOPATH: `go env GOPATH`"
+
+COVERAGE_PROFILE="${ROOT}/.coverage"
+COVERAGERC="coverage.config"
+COVERAGE_HTML="coverage.html"
+DEFAULT_MIN_COVERAGE=75
+
+tests_failed=0
+coverage_low=0
+code_warnings=()
+rm -f "$COVERAGE_PROFILE"
+GOTEST_ARGS=()
+
+if ! go test -coverprofile "${COVERAGE_PROFILE}" "${GOTEST_ARGS[@]}" ./...; then
+	tests_failed=1
+fi
+go tool cover -html="${COVERAGE_PROFILE}" -o "${COVERAGE_HTML}"
+echo "Wrote ${ROOT}/${COVERAGE_HTML} - open in a browser to see coverage."
+if [ -f "${ROOT}/${COVERAGERC}" ]; then
+	min_coverage=`jsonread "${ROOT}/${COVERAGERC}" min_coverage "$DEFAULT_MIN_COVERAGE"`
+else
+	min_coverage="$DEFAULT_MIN_COVERAGE"
+fi
+
+if ! go vet ./...; then
+	code_warnings=("${code_warnings[@]}" "go vet has warnings")
+fi
+
+if ! staticcheck ./...; then
+	code_warnings=("${code_warnings[@]}" "staticcheck has warnings")
+fi
+
+if [[ ! -z $(gofmt -l -s .) ]]; then
+	echo "WARNING: the following files are not formatted correctly:"
+	gofmt -l -s .
+	echo "Please run 'make gofmt'."
+	code_warnings=("${code_warnings[@]}" "need to run 'make gofmt'")
+fi
+
+if [ -f "$COVERAGE_PROFILE" ]; then
+    if ! gocovcheck "$COVERAGE_PROFILE" "$min_coverage"; then
+	coverage_low=1
+    fi
+fi
+
+exit_code=0
+
+if [ ${tests_failed} -ne 0 ]; then
+    echo "Tests failed."
+    exit_code=1
+fi
+
+if [ ${coverage_low} -ne 0 ]; then
+    echo "Insufficient coverage."
+    exit_code=1
+fi
+
+if [ ${#code_warnings[@]} -ne 0 ]; then
+    echo "Code quality:"
+    for msg in "${code_warnings[@]}"; do
+	echo "  $msg"
+    done
+    exit_code=1
+fi
+
+if [ $exit_code -eq 0 ]; then
+    echo "Tests pass."
+fi
+
+exit "$exit_code"
