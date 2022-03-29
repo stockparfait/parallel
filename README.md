@@ -35,7 +35,9 @@ func job(i int) parallel.Job {
 }
 
 func main() {
-	for _, r := range parallel.MapSlice(ctx, 2, []Job{job(5), job(10)}) {
+	ctx := context.Background()
+	jobs := []parallel.Job{job(5), job(10)}
+	for _, r := range parallel.MapSlice(ctx, 2, jobs) {
 		if r.Error != nil {
 			fmt.Printf("job failed: %s\n", r.Error.Error())
 			return
