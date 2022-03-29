@@ -28,8 +28,9 @@ const (
 	parallelKey contextKey = iota
 )
 
-// TestSerialize forces a Parallel runner to run jobs serially and in the strict
-// FIFO order.
+// TestSerialize forces the number of workers in Map to be 1, thereby running
+// jobs serially and in the strict FIFO order. This helps make tests
+// deterministic.
 func TestSerialize(ctx context.Context) context.Context {
 	return context.WithValue(ctx, parallelKey, true)
 }
@@ -101,14 +102,14 @@ var _ ResultsIter = &mapIter{}
 //
 // Example usage:
 //
-// m := Map(context.Background(), 2, jobsIter)
-// for {
-//   v, err := m.Next()
-//   if err == iterator.Done {
-//     break
+//   m := Map(context.Background(), 2, jobsIter)
+//   for {
+//     v, err := m.Next()
+//     if err == iterator.Done {
+//       break
+//     }
+//     // Process v and err.
 //   }
-//   // Process v and err.
-// }
 func Map(ctx context.Context, workers int, it JobsIter) ResultsIter {
 	if isSerialized(ctx) {
 		workers = 1
