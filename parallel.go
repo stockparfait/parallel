@@ -40,17 +40,26 @@ func isSerialized(ctx context.Context) bool {
 }
 
 // Job is a unit of work to be done, which returns a result and an error.
+//
+// Note: a Job instance cannot return iterator.Done as an error; it is reserved
+// for iterators, and will break their functionality.
 type Job = func() (interface{}, error)
 
-// JobsIter is a generator of work units for executing in Map (the API).  The
-// iterator loosely complies with Google Cloud iterator guidelines: it either
-// returns a work unit as a callable function, or an error. When the error is
-// iterator.Done, it's the end of the sequence (and not really an error).
+// JobsIter is a generator of work units for executing in Map. The iterator
+// complies with Google Cloud iterator guidelines: it either returns a work unit
+// as a callable function, or an error. When the error is iterator.Done, it's
+// the end of the sequence (and not really an error).
 type JobsIter interface {
 	Next() (Job, error)
 }
 
-// ResultsIter is an iterator over results, typically merged from parallel runs.
+// ResultsIter is an iterator over jobs results merged from parallel runs.
+//
+// Note, that Next() may return a non-nil error from a job, but only
+// iterator.Done means all the jobs have finished.
+//
+// Also, when error is iterator.Done, a non-nil value can be a non-job related
+// error, e.g. from JobsIter.
 type ResultsIter interface {
 	Next() (interface{}, error)
 }
@@ -61,30 +70,8 @@ type Result struct {
 	Error error
 }
 
-// Map runs multiple jobs in parallel on a given number of workers, 0=unlimited,
-// collects their results and returns in an iterator. The order of results is
-// not guaranteed, unless the number of workers is 1.
-//
-// Canceling the supplied context, or calling Stop() immediately stops queuing
-// new jobs, but the jobs that already started will finish and their results
-// will be returned.
-//
-// Example usage:
-//
-// m := NewMap(ctx, 2, jobsIter)
-// for {
-//   v, err := m.Next()
-//   if err == iterator.Done {
-//     break
-//   }
-//   // Process v and err.
-// }
-//
-// Note, that Next() may return a non-nil error from a job, but only
-// iterator.Done means all the jobs have finished.
-type Map struct {
-	ctx     context.Context // derived cancelable context
-	cancel  func()          // function that cancels ctx
+type mapIter struct {
+	ctx     context.Context // potentially cancelable context
 	workers int             // maximum number of parallel jobs allowed
 	jobs    int             // number of jobs currently running
 	it      JobsIter        // job iterator
@@ -93,18 +80,41 @@ type Map struct {
 	mux     sync.Mutex      // to make Next() go routine safe
 }
 
-var _ ResultsIter = &Map{}
+var _ ResultsIter = &mapIter{}
 
-// NewMap creates a new parallel map runner. If workers <= 0, the number
-// of workers is unlimited.
-func NewMap(ctx context.Context, workers int, it JobsIter) *Map {
+// Map runs multiple jobs in parallel on a given number of workers, 0=unlimited,
+// collects their results and returns as an iterator. The order of results is
+// not guaranteed, unless the number of workers is 1.
+//
+// Canceling the supplied context immediately stops queuing new jobs, but the
+// jobs that already started will finish and their results will be returned.
+// Therefore, it is important to flush the iterator after canceling the context
+// to release all the resources.
+//
+// No job is started by this method itself. Jobs begin to run on the first
+// Next() call on the result iterator, which is go routine safe.
+//
+// If the supplied JobsIter returns an error other than iterator.Done, the
+// Next() call returns iterator.Done and returns the original error as a value.
+// It is, therefore, important to check the value field when the ResultsIter
+// completes.
+//
+// Example usage:
+//
+// m := Map(context.Background(), 2, jobsIter)
+// for {
+//   v, err := m.Next()
+//   if err == iterator.Done {
+//     break
+//   }
+//   // Process v and err.
+// }
+func Map(ctx context.Context, workers int, it JobsIter) ResultsIter {
 	if isSerialized(ctx) {
 		workers = 1
 	}
-	cc, cancel := context.WithCancel(ctx)
-	return &Map{
-		ctx:     cc,
-		cancel:  cancel,
+	return &mapIter{
+		ctx:     ctx,
 		workers: workers,
 		resCh:   make(chan Result),
 		it:      it,
@@ -112,7 +122,7 @@ func NewMap(ctx context.Context, workers int, it JobsIter) *Map {
 }
 
 // startJobs starts as many jobs as possible given the number of workers.
-func (m *Map) startJobs() {
+func (m *mapIter) startJobs() {
 	if m.done != nil {
 		return
 	}
@@ -136,15 +146,10 @@ func (m *Map) startJobs() {
 	}
 }
 
-// Next runs jobs in parallel up to the number of workers, blocks till at least
-// one finishes (if any), and returns its result. When no more jobs are left,
-// return iterator.Done error. Go routine safe.
-//
-// Note, that any other error doesn't mean the iterator is done; instead, it's
-// the job's error forwarded as is. However, when error is iterator.Done, the
-// value may be an error returned by the premature termination of the job
-// iterator; otherwise, it is nil.
-func (m *Map) Next() (interface{}, error) {
+// Next implements ResultsIter. It runs jobs in parallel up to the number of
+// workers, blocks till at least one finishes (if any), and returns its result.
+// When no more jobs are left, return iterator.Done error. Go routine safe.
+func (m *mapIter) Next() (interface{}, error) {
 	m.mux.Lock()
 	defer m.mux.Unlock()
 
@@ -161,10 +166,6 @@ func (m *Map) Next() (interface{}, error) {
 	m.startJobs()
 	return r.Value, r.Error
 }
-
-// Stop queuing new jobs. It is equivalent to canceling the context supplied to
-// NewMap.
-func (m *Map) Stop() { m.cancel() }
 
 // jobs is an implementation of JobsIter from a slice of Job.
 type jobs struct {
@@ -189,12 +190,14 @@ func Jobs(js []Job) JobsIter {
 }
 
 // Results collects all the results from ResultsIter into the slice of Result.
-func Results(it ResultsIter) (res []Result) {
+func Results(it ResultsIter) (res []Result, err error) {
 	for {
 		var r Result
 		r.Value, r.Error = it.Next()
 		if r.Error == iterator.Done {
-			r.Error = nil
+			if e, ok := r.Value.(error); ok {
+				err = e
+			}
 			break
 		}
 		res = append(res, r)
@@ -205,7 +208,9 @@ func Results(it ResultsIter) (res []Result) {
 // MapSlice is a convenience method around Map. It runs a slice of jobs in
 // parallel, waits for them to finish, and returns the results as a slice.
 func MapSlice(ctx context.Context, workers int, jobs []Job) []Result {
-	return Results(NewMap(ctx, workers, Jobs(jobs)))
+	// Jobs() never returns non-nil error, it's safe to ignore it.
+	res, _ := Results(Map(ctx, workers, Jobs(jobs)))
+	return res
 }
 
 // Failed returns the sub-slice of only failed results, whose error is not nil.

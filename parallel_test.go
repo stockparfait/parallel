@@ -28,6 +28,28 @@ import (
 
 var mux sync.Mutex
 
+type jobsIterErr struct {
+	jobs []Job
+	i    int
+	err  error
+}
+
+func (j *jobsIterErr) Next() (Job, error) {
+	i := j.i
+	if i < len(j.jobs) {
+		j.i++
+		return j.jobs[i], nil
+	}
+	return nil, j.err
+}
+
+func jobsErr(jobs []Job, err error) JobsIter {
+	if err == nil {
+		err = iterator.Done
+	}
+	return &jobsIterErr{jobs: jobs, err: err}
+}
+
 func TestParallel(t *testing.T) {
 	t.Parallel()
 	Convey("Map works", t, func() {
@@ -89,7 +111,7 @@ func TestParallel(t *testing.T) {
 			So(len(sequence), ShouldEqual, 15)
 		})
 
-		Convey("with a failing thread", func() {
+		Convey("with a failing job", func() {
 			err := fmt.Errorf("test error")
 			jobs := []Job{job(0, nil), job(1, err)}
 			res := MapSlice(ctx, 0, jobs)
@@ -100,25 +122,34 @@ func TestParallel(t *testing.T) {
 			So(len(res), ShouldEqual, 2)
 		})
 
-		Convey("with no threads", func() {
+		Convey("with no jobs", func() {
 			res := MapSlice(ctx, 0, nil)
 			So(len(res), ShouldEqual, 0)
 		})
 
-		Convey("Stop drains jobs", func() {
-			m := NewMap(ctx, 3, Jobs(jobs(15)))
+		Convey("canceling context stops enqueuing jobs", func() {
+			cc, cancel := context.WithCancel(ctx)
+			m := Map(cc, 3, Jobs(jobs(15)))
 			_, err := m.Next()
 			So(err, ShouldBeNil)
-			m.Stop() // 3 more still in flight
+			cancel() // 3 more still in flight
 			_, err = m.Next()
 			So(err, ShouldBeNil)
 			_, err = m.Next()
 			So(err, ShouldBeNil)
 			_, err = m.Next()
 			So(err, ShouldBeNil)
-			_, err = m.Next()
+			v, err := m.Next()
 			So(err, ShouldEqual, iterator.Done)
+			So(v, ShouldBeNil) // check for JobsIter error
 			So(len(sequence), ShouldEqual, 4)
+		})
+
+		Convey("error from JobsIter propagates through Results", func() {
+			testErr := fmt.Errorf("test error")
+			res, err := Results(Map(ctx, 3, jobsErr(jobs(5), testErr)))
+			So(len(res), ShouldEqual, 5)
+			So(err, ShouldEqual, testErr)
 		})
 	})
 }

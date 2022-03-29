@@ -7,7 +7,7 @@ parallel and the results are returned as an iterator of the results
 (`ResultsIter`).
 
 For simpler situations when all jobs can be created ahead of time, use `Jobs` to
-convert a slice of jobs to an iterator. If in addition, all the results need to be collected
+convert a slice of jobs into an iterator. If all the results can be collected
 before further processing, use `MapSlice`.
 
 ## Installation
@@ -29,7 +29,7 @@ import (
 )
 
 func job(i int) parallel.Job {
-	return func() (int, error) {
+	return func() (interface{}, error) {
 		return i + 1, nil
 	}
 }
