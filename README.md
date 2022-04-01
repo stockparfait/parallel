@@ -29,8 +29,8 @@ import (
 )
 
 func job(i int) parallel.Job {
-	return func() (interface{}, error) {
-		return i + 1, nil
+	return func() interface{} {
+		return i + 1
 	}
 }
 
@@ -38,11 +38,7 @@ func main() {
 	ctx := context.Background()
 	jobs := []parallel.Job{job(5), job(10)}
 	for _, r := range parallel.MapSlice(ctx, 2, jobs) {
-		if r.Error != nil {
-			fmt.Printf("job failed: %s\n", r.Error.Error())
-			return
-		}
-		fmt.Printf("result = %d\n", r.Value.(int))
+		fmt.Printf("result = %d\n", r.(int))
 	}
 }
 ```
