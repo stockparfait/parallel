@@ -21,8 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/api/iterator"
-
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -45,7 +43,7 @@ func (j *jobsIterErr) Next() (Job, error) {
 
 func jobsErr(jobs []Job, err error) JobsIter {
 	if err == nil {
-		err = iterator.Done
+		err = Done
 	}
 	return &jobsIterErr{jobs: jobs, err: err}
 }
@@ -73,25 +71,25 @@ func TestParallel(t *testing.T) {
 			mux.Unlock()
 		}
 
-		job := func(i int, err error) Job {
-			return func() (interface{}, error) {
+		job := func(i int) Job {
+			return func() interface{} {
 				start(i)
 				time.Sleep(1 * time.Millisecond)
 				end()
-				return i, err
+				return i
 			}
 		}
 
 		jobs := func(n int) (jobs []Job) {
 			for i := 0; i < n; i++ {
-				jobs = append(jobs, job(i, nil))
+				jobs = append(jobs, job(i))
 			}
 			return
 		}
 
-		expectedResults := func(n int) (res []Result) {
+		expectedResults := func(n int) (res []interface{}) {
 			for i := 0; i < n; i++ {
-				res = append(res, Result{Value: i})
+				res = append(res, i)
 			}
 			return
 		}
@@ -99,7 +97,6 @@ func TestParallel(t *testing.T) {
 		Convey("with limited workers", func() {
 			res := MapSlice(ctx, 5, jobs(15))
 			So(len(res), ShouldEqual, 15)
-			So(len(Failed(res)), ShouldEqual, 0)
 			So(len(sequence), ShouldEqual, 15)
 			So(maxRunning, ShouldEqual, 5)
 		})
@@ -109,17 +106,6 @@ func TestParallel(t *testing.T) {
 			So(res, ShouldResemble, expectedResults(15))
 			So(maxRunning, ShouldEqual, 1)
 			So(len(sequence), ShouldEqual, 15)
-		})
-
-		Convey("with a failing job", func() {
-			err := fmt.Errorf("test error")
-			jobs := []Job{job(0, nil), job(1, err)}
-			res := MapSlice(ctx, 0, jobs)
-			failed := Failed(res)
-			So(len(failed), ShouldEqual, 1)
-			So(failed[0].Error, ShouldEqual, err)
-			So(len(sequence), ShouldEqual, 2)
-			So(len(res), ShouldEqual, 2)
 		})
 
 		Convey("with no jobs", func() {
@@ -140,7 +126,7 @@ func TestParallel(t *testing.T) {
 			_, err = m.Next()
 			So(err, ShouldBeNil)
 			v, err := m.Next()
-			So(err, ShouldEqual, iterator.Done)
+			So(err, ShouldEqual, Done)
 			So(v, ShouldBeNil) // check for JobsIter error
 			So(len(sequence), ShouldEqual, 4)
 		})
