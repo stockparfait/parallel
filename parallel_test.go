@@ -26,13 +26,13 @@ import (
 
 var mux sync.Mutex
 
-type jobsIterErr struct {
-	jobs []Job
+type jobsIterErr[T any] struct {
+	jobs []Job[T]
 	i    int
 	err  error
 }
 
-func (j *jobsIterErr) Next() (Job, error) {
+func (j *jobsIterErr[T]) Next() (Job[T], error) {
 	i := j.i
 	if i < len(j.jobs) {
 		j.i++
@@ -41,11 +41,11 @@ func (j *jobsIterErr) Next() (Job, error) {
 	return nil, j.err
 }
 
-func jobsErr(jobs []Job, err error) JobsIter {
+func jobsErr[T any](jobs []Job[T], err error) JobsIter[T] {
 	if err == nil {
 		err = Done
 	}
-	return &jobsIterErr{jobs: jobs, err: err}
+	return &jobsIterErr[T]{jobs: jobs, err: err}
 }
 
 func TestParallel(t *testing.T) {
@@ -71,8 +71,8 @@ func TestParallel(t *testing.T) {
 			mux.Unlock()
 		}
 
-		job := func(i int) Job {
-			return func() interface{} {
+		job := func(i int) Job[int] {
+			return func() int {
 				start(i)
 				time.Sleep(1 * time.Millisecond)
 				end()
@@ -80,14 +80,14 @@ func TestParallel(t *testing.T) {
 			}
 		}
 
-		jobs := func(n int) (jobs []Job) {
+		jobs := func(n int) (jobs []Job[int]) {
 			for i := 0; i < n; i++ {
 				jobs = append(jobs, job(i))
 			}
 			return
 		}
 
-		expectedResults := func(n int) (res []interface{}) {
+		expectedResults := func(n int) (res []int) {
 			for i := 0; i < n; i++ {
 				res = append(res, i)
 			}
@@ -109,7 +109,7 @@ func TestParallel(t *testing.T) {
 		})
 
 		Convey("with no jobs", func() {
-			res := MapSlice(ctx, 0, nil)
+			res := MapSlice[int](ctx, 0, nil)
 			So(len(res), ShouldEqual, 0)
 		})
 
@@ -127,7 +127,7 @@ func TestParallel(t *testing.T) {
 			So(err, ShouldBeNil)
 			v, err := m.Next()
 			So(err, ShouldEqual, Done)
-			So(v, ShouldBeNil) // check for JobsIter error
+			So(v, ShouldEqual, 0)
 			So(len(sequence), ShouldEqual, 4)
 		})
 
