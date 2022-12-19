@@ -10,6 +10,8 @@ For simpler situations when all jobs can be created ahead of time, use `Jobs` to
 convert a slice of jobs into an iterator. If all the results can be collected
 before further processing, use `MapSlice`.
 
+This package requires Go 1.18 or higher, as it uses generics.
+
 ## Installation
 
 ```
@@ -28,17 +30,17 @@ import (
 	"github.com/stockparfait/parallel"
 )
 
-func job(i int) parallel.Job {
-	return func() interface{} {
+func job(i int) parallel.Job[int] {
+	return func() int {
 		return i + 1
 	}
 }
 
 func main() {
 	ctx := context.Background()
-	jobs := []parallel.Job{job(5), job(10)}
+	jobs := []parallel.Job[int]{job(5), job(10)}
 	for _, r := range parallel.MapSlice(ctx, 2, jobs) {
-		fmt.Printf("result = %d\n", r.(int))
+		fmt.Printf("result = %d\n", r)
 	}
 }
 ```
